@@ -32,6 +32,7 @@ This submodule contains the core ``ExifTool`` class of PyExifTool
 # ---------- standard Python imports ----------
 import select
 import subprocess
+import time
 import os
 import shutil
 from pathlib import Path  # requires Python 3.4+
@@ -43,6 +44,7 @@ import json  # NOTE: to use other json libraries (simplejson/ujson/orjson/...), 
 # for the pdeathsig
 import signal
 import ctypes
+import logging
 
 
 
@@ -107,7 +109,7 @@ def _get_buffer_end(buffer_list: List[bytes], bytes_needed: int) -> bytes:
 	return buf_tail_joined
 
 
-def _read_fd_endswith(fd, b_endswith: bytes, block_size: int) -> bytes:
+def _read_fd_endswith(fd, b_endswith: bytes, block_size: int, timeout: Optional[int] = 10) -> bytes:
 	""" read an fd and keep reading until it endswith the seq_ends
 
 		this allows a consolidated read function that is platform indepdent
@@ -120,6 +122,9 @@ def _read_fd_endswith(fd, b_endswith: bytes, block_size: int) -> bytes:
 	# this value can be bigger to capture more bytes at the "tail" of the read, but if it's too small, the whitespace might miss the detection
 	endswith_count = len(b_endswith) + 4
 
+	# counting attempts to prevent infinite loops
+	_attempts_counter = 0
+
 	# I believe doing a splice, then a strip is more efficient in memory hence the original code did it this way.
 	# need to benchmark to see if in large strings, strip()[-endswithcount:] is more expensive or not
 	while not _get_buffer_end(output_list, endswith_count).strip().endswith(b_endswith):
@@ -129,10 +134,16 @@ def _read_fd_endswith(fd, b_endswith: bytes, block_size: int) -> bytes:
 			output_list.append(os.read(fd, block_size))
 		else:  # pytest-cov:windows: no cover
 			# this does NOT work on windows... and it may not work on other systems... in that case, put more things to use the original code above
-			inputready, outputready, exceptready = select.select([fd], [], [])
+			inputready, _, _ = select.select([fd], [], [], 1.0)
 			for i in inputready:
 				if i == fd:
 					output_list.append(os.read(fd, block_size))
+			else:
+				# nothing to read, wait a bit
+				time.sleep(0.1)
+				_attempts_counter += 1
+				if timeout is not None and _attempts_counter >= timeout:
+					raise TimeoutError("Timeout waiting for ExifTool output")
 
 	return b"".join(output_list)
 
@@ -269,7 +280,7 @@ class ExifTool(object):
 		self._executable: Union[str, Path] = constants.DEFAULT_EXECUTABLE  # executable absolute path (default set to just the executable name, so it can't be None)
 		self._config_file: Optional[str] = None  # config file that can only be set when exiftool is not running
 		self._common_args: Optional[List[str]] = None
-		self._logger = None
+		self._logger = logging.getLogger(__name__)  # default logger is the module logger, which is set to WARNING level by default
 		self._encoding: Optional[str] = None
 		self._json_loads: Callable = json.loads  # variable points to the actual callable method
 		self._json_loads_kwargs: dict = {}  # default optional params to pass into json.loads() call
@@ -1064,13 +1075,22 @@ class ExifTool(object):
 		#
 		# The data that comes back from exiftool falls into this, and so unbuffered reads are done with os.read()
 
+		raw_stdout = b''
+		raw_stderr = b''
+
 		fdout = self._process.stdout.fileno()
-		raw_stdout = _read_fd_endswith(fdout, seq_ready.encode(self._encoding), self._block_size)
+		try:
+			raw_stdout = _read_fd_endswith(fdout, seq_ready.encode(self._encoding), self._block_size)
+		except TimeoutError:
+			# in case of timeout, we still want to try to read stderr out
+			raw_stdout = b"TimeoutError to read stdout"
 
 		# when it's ready, we can safely read all of stderr out, as the command is already done
 		fderr = self._process.stderr.fileno()
-		raw_stderr = _read_fd_endswith(fderr, seq_err_post.encode(self._encoding), self._block_size)
-
+		try:
+			raw_stderr = _read_fd_endswith(fderr, seq_err_post.encode(self._encoding), self._block_size)
+		except TimeoutError:
+			raw_stderr = b"TimeoutError to read stderr"
 
 		if not raw_bytes:
 			# decode if not returning bytes

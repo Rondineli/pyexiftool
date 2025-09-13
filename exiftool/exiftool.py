@@ -137,7 +137,6 @@ def _read_fd_endswith(fd, b_endswith: bytes, block_size: int, timeout: Optional[
 				if i == fd:
 					output_list.append(os.read(fd, block_size))
 			else:
-				
 				# nothing to read, wait a bit to retry
 				time.sleep(0.1)
 				_attempts_counter += 1

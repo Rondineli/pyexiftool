@@ -44,8 +44,6 @@ import json  # NOTE: to use other json libraries (simplejson/ujson/orjson/...), 
 # for the pdeathsig
 import signal
 import ctypes
-import logging
-
 
 
 # ---------- Typing Imports ----------
@@ -139,11 +137,14 @@ def _read_fd_endswith(fd, b_endswith: bytes, block_size: int, timeout: Optional[
 				if i == fd:
 					output_list.append(os.read(fd, block_size))
 			else:
-				# nothing to read, wait a bit
+				
+				# nothing to read, wait a bit to retry
 				time.sleep(0.1)
 				_attempts_counter += 1
 				if timeout is not None and _attempts_counter >= timeout:
+					warnings.warn("Timeout to read from output, verify stdeer.")
 					raise TimeoutError("Timeout waiting for ExifTool output")
+				warnings.warn("Stdout timed out, retrying ...")
 
 	return b"".join(output_list)
 
@@ -280,7 +281,6 @@ class ExifTool(object):
 		self._executable: Union[str, Path] = constants.DEFAULT_EXECUTABLE  # executable absolute path (default set to just the executable name, so it can't be None)
 		self._config_file: Optional[str] = None  # config file that can only be set when exiftool is not running
 		self._common_args: Optional[List[str]] = None
-		self._logger = logging.getLogger(__name__)  # default logger is the module logger, which is set to WARNING level by default
 		self._encoding: Optional[str] = None
 		self._json_loads: Callable = json.loads  # variable points to the actual callable method
 		self._json_loads_kwargs: dict = {}  # default optional params to pass into json.loads() call

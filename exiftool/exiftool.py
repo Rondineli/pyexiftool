@@ -143,7 +143,6 @@ def _read_fd_endswith(fd, b_endswith: bytes, block_size: int, timeout: Optional[
 				if timeout is not None and _attempts_counter >= timeout:
 					warnings.warn("Timeout to read from output, verify stdeer.")
 					raise TimeoutError("Timeout waiting for ExifTool output")
-				warnings.warn("Stdout timed out, retrying ...")
 
 	return b"".join(output_list)
 
